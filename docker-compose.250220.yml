@@ -19,4 +19,4 @@ services:
         max-file: "3"
   ollama-proxy:
     ports:
-      - "11435:8000"
+      - "11434:8000"

@@ -6,7 +6,6 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
 # 检查端口占用
 check_port() {
     local port=$1
@@ -199,17 +198,67 @@ install_docker() {
     fi
 }
 
+# 修改端口冲突处理逻辑
+handle_port_conflict() {
+    local port=$1
+    echo -e "${YELLOW}检测到${port}端口占用，正在分析来源...${NC}"
+    
+    # 获取占用进程信息
+    local pid=$(lsof -t -i :$port)
+    local process_info=$(ps -p $pid -o comm=,args= 2>/dev/null)
+    
+    # 判断是否为Docker容器占用
+    if [[ "$process_info" == *"docker-proxy"* ]]; then
+        echo -e "${YELLOW}发现Docker容器占用端口，尝试安全清理...${NC}"
+        local container_id=$(docker ps --filter "publish=$port" --format "{{.ID}}")
+        if [ -n "$container_id" ]; then
+            echo -e "${YELLOW}正在停止冲突容器 $container_id ...${NC}"
+            docker stop $container_id && docker rm $container_id
+            sleep 2
+        else
+            echo -e "${RED}错误：未能找到对应容器，建议手动处理${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}错误：端口被非Docker进程占用，进程信息：${NC}"
+        echo "进程ID: $pid"
+        echo "进程详情: $process_info"
+        echo -e "${YELLOW}请选择操作："
+        echo -e "1) 手动终止进程后继续"
+        echo -e "2) 退出部署脚本"
+        read -p "请输入选项 [1-2]: " choice
+        case $choice in
+            1) echo -e "${YELLOW}请手动处理后再运行脚本${NC}"; exit 1 ;;
+            *) echo -e "${RED}部署已取消${NC}"; exit 1 ;;
+        esac
+    fi
+}
+
 # 部署 ollama-proxy
 deploy_ollama_proxy() {
     echo -e "${YELLOW}部署 Ollama 代理服务...${NC}"
+    
+    # 新增端口释放检查
+    if lsof -i :11434 >/dev/null; then
+        handle_port_conflict 11434
+    fi
+    
+    # 新增服务白名单检查
+    PROTECTED_CONTAINERS="1Panel|ollama"
+    if docker ps --format '{{.Names}}' | grep -qE "$PROTECTED_CONTAINERS"; then
+        echo -e "${YELLOW}检测到关键服务容器，跳过端口冲突检查${NC}"
+        return 0
+    fi
+    
     sudo tee docker-compose.yml > /dev/null <<EOF
 version: '3'
 services:
   ollama-proxy:
     image: ollama/ollama
-    ports:
-      - "11434:11434"
+    network_mode: "host"  # 改为host模式避免端口冲突
     restart: unless-stopped
+    ports:
+      - "11434:11434"  # 统一使用11434端口
 EOF
 
     sudo docker-compose up -d
@@ -230,26 +279,34 @@ EOF
     echo -e "\n${GREEN}✓ Ollama服务已就绪${NC}"
 }
 
+# 新增服务依赖检查
+check_ollama_service() {
+    echo -e "${YELLOW}检查Ollama服务状态...${NC}"
+    if curl -s --connect-timeout 3 http://localhost:11434/api/version >/dev/null; then
+        echo -e "${GREEN}✓ 检测到现有Ollama服务${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}未检测到运行中的Ollama服务，开始部署...${NC}"
+        deploy_ollama_proxy
+        return $?
+    fi
+}
+
 # 主程序开始
 echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
 
-# 检查端口占用
-echo -e "${YELLOW}检查端口占用情况...${NC}"
-while ! check_port 8080; do
-    echo -e "${YELLOW}端口问题未解决，是否重试？[y/N]${NC}"
-    read -r retry
-    if [[ ! $retry =~ ^[Yy]$ ]]; then
-        echo -e "${RED}部署已取消${NC}"
-        exit 1
-    fi
-done
+# 在部署ollama前添加端口检查
+check_port 11434  # 改为检查11434端口
+check_port 8080   # 原有8080检查
 
 # 检查系统类型
 check_system_type
 
 # 安装 Docker 和 Docker Compose
 install_docker
-deploy_ollama_proxy
+
+# 主程序调用
+check_ollama_service || exit 1
 
 # 执行 Nginx 检查和安装
 check_and_install_nginx
@@ -274,8 +331,8 @@ server {
         proxy_connect_timeout 300;  # 增加连接超时
     }
 
-    location /v1 {  # 新增模型服务代理
-        proxy_pass http://127.0.0.1:11434/v1;
+    location /v1 { # 新增模型服务代理
+        proxy_pass http://127.0.0.1:11434/v1;  # 改回11434端口
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -305,22 +362,39 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # 创建并激活虚拟环境
-echo -e "${YELLOW}创建虚拟环境...${NC}"
-python3 -m venv venv
+if [ ! -d "venv" ]; then
+    echo -e "${YELLOW}创建虚拟环境...${NC}"
+    python3 -m venv venv
+fi
 source venv/bin/activate
 
-# 升级 pip
-echo -e "${YELLOW}升级 pip...${NC}"
-python3 -m pip install --upgrade pip
+# 检查依赖是否已安装
+REQUIREMENTS_HASH=$(sha1sum requirements.txt | cut -d' ' -f1)
+CACHED_HASH_FILE=".requirements_hash"
 
-# 安装依赖
-echo -e "${YELLOW}安装必需依赖...${NC}"
-pip3 install -r requirements.txt
+if [ ! -f "$CACHED_HASH_FILE" ] || [ "$REQUIREMENTS_HASH" != "$(cat $CACHED_HASH_FILE)" ]; then
+    echo -e "${YELLOW}升级 pip...${NC}"
+    python3 -m pip install --upgrade pip
 
-# 安装可选依赖
-echo -e "${YELLOW}安装可选依赖...${NC}"
+    echo -e "${YELLOW}安装必需依赖...${NC}"
+    pip3 install -r requirements.txt
+    echo "$REQUIREMENTS_HASH" > "$CACHED_HASH_FILE"
+else
+    echo -e "${GREEN}✓ 依赖已是最新，跳过安装${NC}"
+fi
+
+# 可选依赖安装优化
 if [ -f "requirements-optional.txt" ]; then
-    pip3 install -r requirements-optional.txt
+    OPTIONAL_HASH=$(sha1sum requirements-optional.txt | cut -d' ' -f1)
+    CACHED_OPT_HASH_FILE=".optional_requirements_hash"
+    
+    if [ ! -f "$CACHED_OPT_HASH_FILE" ] || [ "$OPTIONAL_HASH" != "$(cat $CACHED_OPT_HASH_FILE)" ]; then
+        echo -e "${YELLOW}安装可选依赖...${NC}"
+        pip3 install -r requirements-optional.txt
+        echo "$OPTIONAL_HASH" > "$CACHED_OPT_HASH_FILE"
+    else
+        echo -e "${GREEN}✓ 可选依赖已是最新，跳过安装${NC}"
+    fi
 fi
 
 # 创建日志文件
@@ -334,13 +408,19 @@ if [ ! -f "config.json" ]; then
     exit 1
 fi
 
-# 验证配置中的API地址
-if ! grep -q '"open_ai_api_base": "http://localhost:11434/v1"' config.json; then
-    echo -e "${RED}错误：config.json 配置不正确，请确保包含以下内容：${NC}"
-    echo -e '${GREEN}{
-  "open_ai_api_base": "http://localhost:11434/v1",
-  "port": 8080
-}${NC}'
+# 获取当前服务器IP
+CURRENT_IP=$(curl -s --connect-timeout 3 ifconfig.me || echo "localhost")
+VALID_PORTS=("11434")
+JQ_CONDITION=".open_ai_api_base | endswith(\"/v1\") and (. | contains(\":11434/v1\"))"
+
+if ! jq -e "${JQ_CONDITION} and .wechatmp_port == 8080" config.json >/dev/null; then
+    echo -e "${RED}错误：config.json 需要包含以下配置：${NC}"
+    echo -e "${GREEN}{
+  \"open_ai_api_base\": \"http://<IP>:11434/v1\",
+  \"wechatmp_port\": 8080
+}${NC}"
+    echo -e "当前配置内容："
+    jq . config.json
     exit 1
 fi
 
