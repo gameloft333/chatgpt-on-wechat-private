@@ -18,6 +18,10 @@ from common.log import logger
 from common import const
 from config import conf, load_config
 
+# 新增 Ollama 配置
+openai.api_base = conf().get("open_ai_api_base")
+openai.api_key = "sk-any-string" # Ollama 不需要真实密钥
+
 class AliQwenBot(Bot):
     def __init__(self):
         super().__init__()
