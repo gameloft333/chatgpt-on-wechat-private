@@ -9,6 +9,7 @@ RUN apt-get update && \
     python3-dev \
     libc-dev \
     libffi-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制项目文件

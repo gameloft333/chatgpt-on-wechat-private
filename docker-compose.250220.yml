@@ -8,6 +8,12 @@ services:
     volumes:
       - ./config.json:/app/config.json
       - ./plugins:/app/plugins
+      - ./logs:/app/logs
     environment:
       TZ: Asia/Shanghai
     restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
