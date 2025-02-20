@@ -418,7 +418,7 @@ fi
 # 获取当前服务器IP
 CURRENT_IP=$(curl -s --connect-timeout 3 ifconfig.me || echo "localhost")
 VALID_PORTS=("11434")
-JQ_CONDITION=".open_ai_api_base | test(\"^http(s)?://([0-9]{1,3}\\.?){4}|localhost|127\\.[0-9.]+|\\[::1\\]:11434/v1$\") and .wechatmp_port == 8080"
+JQ_CONDITION=".open_ai_api_base | test(\"^http(s)?://(([0-9]{1,3}\\\\.){3}[0-9]{1,3}|localhost|127\\\\.[0-9]+\\\\.[0-9]+\\\\.[0-9]+|\\\\[::1\\\\]):11434/v1$\") and .wechatmp_port == 8080"
 
 if ! jq -e "${JQ_CONDITION}" config.json >/dev/null; then
     echo -e "${RED}错误：config.json 需要包含以下配置：${NC}"
@@ -430,7 +430,7 @@ if ! jq -e "${JQ_CONDITION}" config.json >/dev/null; then
     echo -e "• http://localhost:11434/v1"
     echo -e "• http://127.0.0.1:11434/v1"
     echo -e "• http://47.129.174.124:11434/v1"
-    echo -e "• https://your-domain.com:11434/v1"
+    echo -e "• http://[::1]:11434/v1 (IPv6)"
     echo -e "当前配置内容："
     jq . config.json
     exit 1
