@@ -206,11 +206,9 @@ deploy_ollama_proxy() {
 version: '3'
 services:
   ollama-proxy:
-    image: ghcr.io/ollama-webui/ollama-proxy:main
+    image: ollama/ollama
     ports:
-      - "11435:8000"
-    environment:
-      - OLLAMA_API_BASE_URL=http://host.docker.internal:11434
+      - "11434:11434"
     restart: unless-stopped
 EOF
 
@@ -314,17 +312,74 @@ nohup python3 app.py > nohup.out 2>&1 &
 echo -e "${YELLOW}等待服务启动...${NC}"
 sleep 3
 
-# 检查服务状态
+# 新增服务验证模块
+echo -e "\n${YELLOW}=== 服务状态验证 ===${NC}"
+
+# 安装jq用于JSON解析
+if ! command -v jq &> /dev/null; then
+    echo -e "${YELLOW}安装jq工具...${NC}"
+    sudo yum install -y jq || sudo apt-get install -y jq
+fi
+
+# 创建验证日志文件
+VALIDATION_LOG="deployment_checks.log"
+echo -e "服务验证日志 $(date)\n" > $VALIDATION_LOG
+
+# 验证Ollama服务
+echo -e "${YELLOW}[1/3] 验证Ollama服务...${NC}"
+{
+    echo -e "\n=== Ollama服务状态 ==="
+    echo "API版本: $(curl -s http://localhost:11434/api/version | jq .)"
+    echo "已加载模型:"
+    curl -s http://localhost:11434/api/tags | jq '.models[].name'
+} | tee -a $VALIDATION_LOG
+
+# 验证对话接口
+echo -e "\n${YELLOW}[2/3] 测试对话接口...${NC}"
+{
+    echo -e "=== 对话接口测试 ==="
+    curl -s http://localhost:11434/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-any-string" \
+      -d '{"model": "deepseek-r1:14b", "messages": [{"role": "user", "content": "你好"}]}' \
+      | jq '.choices[0].message.content'
+} | tee -a $VALIDATION_LOG
+
+# 验证微信服务
+echo -e "\n${YELLOW}[3/3] 验证微信服务连通性...${NC}"
+{
+    echo -e "=== 微信服务检查 ==="
+    echo "Nginx状态: $(systemctl is-active nginx)"
+    echo "应用服务进程: $(pgrep -f 'python3 app.py')"
+    echo "端口监听状态:"
+    sudo netstat -tulnp | grep -E '11434|8080|80'
+} | tee -a $VALIDATION_LOG
+
+# 输出验证结果
+echo -e "\n${GREEN}验证完成，完整日志请查看: ${PWD}/$VALIDATION_LOG${NC}"
+echo -e "${YELLOW}关键指标检查："
+echo -e "• Ollama模型加载: $(grep -q 'deepseek-r1:14b' $VALIDATION_LOG && echo '成功' || echo '失败')"
+echo -e "• 对话接口响应: $(grep -q '你好' $VALIDATION_LOG && echo '正常' || echo '异常')"
+echo -e "• 服务进程状态: $(pgrep -f 'python3 app.py' &> /dev/null && echo '运行中' || echo '未运行')${NC}"
+
+# 新增服务状态检查提示（添加在脚本末尾）
+echo -e "\n${YELLOW}=== 服务启动状态检查 ===${NC}"
 if pgrep -f "python3 app.py" > /dev/null; then
-    echo -e "${GREEN}服务已成功启动！${NC}"
-    echo -e "${YELLOW}正在显示日志输出...${NC}"
-    echo -e "${YELLOW}提示：${NC}"
-    echo -e "1. 请在微信公众平台配置服务器URL: http://你的域名/wx"
-    echo -e "2. 请确保已将服务器IP添加到公众号IP白名单"
-    echo -e "3. 如需查看 Nginx 日志：${GREEN}sudo tail -f /var/log/nginx/error.log${NC}"
-    echo -e "4. 使用 Ctrl+C 可以停止查看日志，但服务会继续运行"
-    echo -e "5. 如需停止服务，请运行：${GREEN}pkill -f 'python3 app.py'${NC}"
+    echo -e "${GREEN}✓ 服务已成功启动！${NC}"
+    echo -e "${YELLOW}操作指引：${NC}"
+    echo -e "1. 请在微信公众平台配置服务器URL: http://$(curl -s ifconfig.me)/wx"
+    echo -e "2. 请确保已将服务器IP ($(curl -s ifconfig.me)) 添加到公众号IP白名单"
+    echo -e "3. 实时日志查看（Ctrl+C退出）：${GREEN}tail -f nohup.out${NC}"
+    echo -e "4. Nginx错误日志查看：${GREEN}sudo tail -f /var/log/nginx/error.log${NC}"
+    echo -e "5. 停止服务命令：${GREEN}pkill -f 'python3 app.py' && docker-compose down${NC}"
+    
+    # 保留日志跟踪功能
+    echo -e "\n${YELLOW}正在进入实时日志监控...${NC}"
     tail -f nohup.out
 else
-    echo -e "${RED}服务启动失败，请检查日志文件 nohup.out${NC}"
+    echo -e "${RED}× 服务启动异常！请检查：${NC}"
+    echo -e "1. 查看错误日志：${GREEN}cat nohup.out${NC}"
+    echo -e "2. 检查端口占用：${GREEN}netstat -tulnp | grep -E '11434|8080|80'${NC}"
+    echo -e "3. 重新启动服务：${GREEN}python3 app.py${NC}"
+    exit 1
 fi
