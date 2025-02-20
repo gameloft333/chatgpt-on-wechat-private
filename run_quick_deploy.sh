@@ -7,6 +7,56 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
+# 检查端口占用
+check_port() {
+    local port=$1
+    if netstat -tuln | grep -q ":$port "; then
+        local pid=$(lsof -t -i:$port)
+        local process_name=$(ps -p $pid -o comm=)
+        if [ "$port" = "80" ] && [ "$process_name" = "nginx" ]; then
+            echo -e "${GREEN}✓ 端口 80 被 Nginx 正常占用${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}警告: 端口 $port 已被 $process_name (PID: $pid) 占用${NC}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# 检查系统类型
+check_system_type() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$NAME
+        echo -e "${YELLOW}检测到操作系统: $OS${NC}"
+        
+        case $ID in
+            "amzn")
+                echo -e "${GREEN}检测到 Amazon Linux${NC}"
+                PACKAGE_MANAGER="yum"
+                NGINX_INSTALL_CMD="amazon-linux-extras install nginx1 -y"
+                ;;
+            "debian"|"ubuntu")
+                echo -e "${GREEN}检测到 Debian/Ubuntu${NC}"
+                PACKAGE_MANAGER="apt-get"
+                NGINX_INSTALL_CMD="apt-get install -y nginx"
+                ;;
+            "rhel"|"centos"|"fedora")
+                echo -e "${GREEN}检测到 RHEL/CentOS/Fedora${NC}"
+                PACKAGE_MANAGER="yum"
+                NGINX_INSTALL_CMD="yum install -y nginx"
+                ;;
+            *)
+                echo -e "${RED}不支持的操作系统: $OS${NC}"
+                exit 1
+                ;;
+        esac
+    else
+        echo -e "${RED}无法检测操作系统类型${NC}"
+        exit 1
+    fi
+}
 
 # 检查并安装/更新 Nginx
 check_and_install_nginx() {
@@ -15,17 +65,17 @@ check_and_install_nginx() {
     # 检查是否安装
     if ! command -v nginx &> /dev/null; then
         echo -e "${YELLOW}Nginx 未安装，正在安装...${NC}"
-        # 静默安装 Nginx
-        if [ -f /etc/debian_version ]; then
-            # Debian/Ubuntu 系统
+        
+        # 根据系统类型安装
+        if [ "$PACKAGE_MANAGER" = "apt-get" ]; then
             sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx > /dev/null 2>&1
-        elif [ -f /etc/redhat-release ]; then
-            # CentOS/RHEL 系统
-            sudo yum install -y nginx > /dev/null 2>&1
-        else
-            echo -e "${RED}不支持的操作系统${NC}"
-            exit 1
+            sudo DEBIAN_FRONTEND=noninteractive $NGINX_INSTALL_CMD > /dev/null 2>&1
+        elif [ "$PACKAGE_MANAGER" = "yum" ]; then
+            if [ "$ID" = "amzn" ]; then
+                sudo $NGINX_INSTALL_CMD > /dev/null 2>&1
+            else
+                sudo $NGINX_INSTALL_CMD > /dev/null 2>&1
+            fi
         fi
         echo -e "${GREEN}Nginx 安装完成${NC}"
     else
@@ -33,7 +83,7 @@ check_and_install_nginx() {
         CURRENT_VERSION=$(nginx -v 2>&1 | grep -o '[0-9.]*$')
         echo -e "${YELLOW}当前 Nginx 版本: ${CURRENT_VERSION}${NC}"
         
-        if [ -f /etc/debian_version ]; then
+        if [ "$PACKAGE_MANAGER" = "apt-get" ]; then
             LATEST_VERSION=$(apt-cache policy nginx | grep Candidate | cut -d ':' -f 2 | tr -d ' ')
             if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
                 echo -e "${YELLOW}发现新版本: ${LATEST_VERSION}，正在更新...${NC}"
@@ -42,7 +92,7 @@ check_and_install_nginx() {
             else
                 echo -e "${GREEN}Nginx 已是最新版本${NC}"
             fi
-        elif [ -f /etc/redhat-release ]; then
+        elif [ "$PACKAGE_MANAGER" = "yum" ]; then
             sudo yum check-update nginx > /dev/null 2>&1
             if [ $? -eq 100 ]; then
                 echo -e "${YELLOW}发现新版本，正在更新...${NC}"
@@ -66,6 +116,23 @@ check_and_install_nginx() {
         sudo systemctl enable nginx > /dev/null 2>&1
     fi
 }
+
+# 主程序开始
+echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
+
+# 检查端口占用
+echo -e "${YELLOW}检查端口占用情况...${NC}"
+if ! check_port 8080; then
+    echo -e "${YELLOW}8080 端口被占用，是否继续部署？[y/N]${NC}"
+    read -r response
+    if [[ ! $response =~ ^[Yy]$ ]]; then
+        echo -e "${RED}部署已取消${NC}"
+        exit 1
+    fi
+fi
+
+# 检查系统类型
+check_system_type
 
 # 执行 Nginx 检查和安装
 check_and_install_nginx
