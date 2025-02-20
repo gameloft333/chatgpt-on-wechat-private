@@ -1,0 +1,13 @@
+# version: '3'
+services:
+  chatgpt-on-wechat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatgpt-on-wechat
+    volumes:
+      - ./config.json:/app/config.json
+      - ./plugins:/app/plugins
+    environment:
+      TZ: Asia/Shanghai
+    restart: always
