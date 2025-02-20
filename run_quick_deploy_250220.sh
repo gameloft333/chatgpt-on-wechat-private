@@ -9,56 +9,63 @@ NC='\033[0m' # No Color
 # 检查端口占用
 check_port() {
     local port=$1
-    if netstat -tuln | grep -q ":$port "; then
-        local pid=$(lsof -t -i:$port)
-        local process_name=$(ps -p $pid -o comm=)
-        if [ "$port" = "80" ] && [ "$process_name" = "nginx" ]; then
-            echo -e "${GREEN}✓ 端口 80 被 Nginx 正常占用${NC}"
-            return 0
-        else
-            echo -e "${YELLOW}警告: 端口 $port 已被 $process_name (PID: $pid) 占用${NC}"
-            echo -e "请选择操作："
-            echo -e "1) 终止占用进程并继续部署"
-            echo -e "2) 取消部署"
-            echo -e "3) 强制继续部署（不推荐）"
-            read -p "请输入选项 [1-3]: " choice
+    # 使用更可靠的ss命令替代netstat
+    if ss -tuln | grep -q ":$port "; then
+        # 获取所有相关PID（修复多PID处理）
+        local pids=($(lsof -t -i :$port 2>/dev/null | tr '\n' ' '))
+        
+        if [ ${#pids[@]} -eq 0 ]; then
+            echo -e "${YELLOW}警告: 端口 $port 被占用但无法获取进程信息${NC}"
+            return 1
+        fi
+
+        # 处理多个PID的情况
+        for pid in "${pids[@]}"; do
+            local process_name=$(ps -p $pid -o comm= 2>/dev/null || echo "未知进程")
             
-            case $choice in
-                1)
-                    echo -e "${YELLOW}正在终止进程 $process_name (PID: $pid)...${NC}"
-                    if kill $pid; then
+            # 特殊处理Nginx（约15-17行）
+            if [ "$port" = "80" ] && [ "$process_name" = "nginx" ]; then
+                echo -e "${GREEN}✓ 端口 80 被 Nginx 正常占用${NC}"
+                continue
+            fi
+
+            echo -e "${YELLOW}警告: 端口 $port 已被 $process_name (PID: $pid) 占用${NC}"
+        done
+
+        # 统一处理用户选择（约20-60行）
+        echo -e "请选择操作："
+        echo -e "1) 终止所有占用进程并继续部署"
+        echo -e "2) 取消部署"
+        echo -e "3) 强制继续部署（不推荐）"
+        read -p "请输入选项 [1-3]: " choice
+        
+        case $choice in
+            1)
+                for pid in "${pids[@]}"; do
+                    echo -e "${YELLOW}正在终止进程 (PID: $pid)...${NC}"
+                    if sudo kill -9 $pid 2>/dev/null; then
                         echo -e "${GREEN}✓ 进程已终止${NC}"
-                        sleep 2  # 等待端口释放
-                        if netstat -tuln | grep -q ":$port "; then
-                            echo -e "${RED}错误：端口 $port 仍被占用，可能需要强制终止进程${NC}"
-                            echo -e "建议执行: ${GREEN}sudo kill -9 $pid${NC}"
-                            return 1
-                        fi
-                        return 0
                     else
-                        echo -e "${RED}错误：无法终止进程，可能需要 sudo 权限${NC}"
+                        echo -e "${RED}错误：无法终止进程 $pid${NC}"
                         return 1
                     fi
-                    ;;
-                2)
-                    echo -e "${RED}部署已取消${NC}"
-                    exit 1
-                    ;;
-                3)
-                    echo -e "${YELLOW}警告：强制继续部署可能会导致端口冲突${NC}"
-                    read -p "确定要继续吗？[y/N] " confirm
-                    if [[ ! $confirm =~ ^[Yy]$ ]]; then
-                        echo -e "${RED}部署已取消${NC}"
-                        exit 1
-                    fi
-                    return 0
-                    ;;
-                *)
-                    echo -e "${RED}无效的选项${NC}"
-                    return 1
-                    ;;
-            esac
-        fi
+                done
+                sleep 2
+                return 0
+                ;;
+            2)
+                echo -e "${RED}部署已取消${NC}"
+                exit 1
+                ;;
+            3)
+                echo -e "${YELLOW}警告：强制继续部署可能会导致服务异常${NC}"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}无效的选项${NC}"
+                return 1
+                ;;
+        esac
     fi
     return 0
 }
@@ -411,14 +418,19 @@ fi
 # 获取当前服务器IP
 CURRENT_IP=$(curl -s --connect-timeout 3 ifconfig.me || echo "localhost")
 VALID_PORTS=("11434")
-JQ_CONDITION=".open_ai_api_base | endswith(\"/v1\") and (. | contains(\":11434/v1\"))"
+JQ_CONDITION=".open_ai_api_base | test(\"^http(s)?://([0-9]{1,3}\\.?){4}|localhost|127\\.[0-9.]+|\\[::1\\]:11434/v1$\") and .wechatmp_port == 8080"
 
-if ! jq -e "${JQ_CONDITION} and .wechatmp_port == 8080" config.json >/dev/null; then
+if ! jq -e "${JQ_CONDITION}" config.json >/dev/null; then
     echo -e "${RED}错误：config.json 需要包含以下配置：${NC}"
     echo -e "${GREEN}{
-  \"open_ai_api_base\": \"http://<IP>:11434/v1\",
+  \"open_ai_api_base\": \"http://<IP或域名>:11434/v1\",
   \"wechatmp_port\": 8080
 }${NC}"
+    echo -e "允许的格式示例："
+    echo -e "• http://localhost:11434/v1"
+    echo -e "• http://127.0.0.1:11434/v1"
+    echo -e "• http://47.129.174.124:11434/v1"
+    echo -e "• https://your-domain.com:11434/v1"
     echo -e "当前配置内容："
     jq . config.json
     exit 1
@@ -469,7 +481,7 @@ echo -e "\n${YELLOW}[2/3] 测试对话接口...${NC}"
 echo -e "\n${YELLOW}[3/3] 验证微信服务连通性...${NC}"
 {
     echo -e "=== 微信服务检查 ==="
-    echo "Nginx状态: $(systemctl is-active nginx)"
+    echo "Nginx状态: $(systemctl is-active nginx 2>/dev/null || echo '未安装')"
     echo "应用服务进程: $(pgrep -f 'python3 app.py')"
     echo "端口监听状态:"
     sudo netstat -tulnp | grep -E '11434|8080|80'
