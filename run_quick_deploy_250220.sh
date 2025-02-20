@@ -265,7 +265,7 @@ services:
     network_mode: "host"  # 改为host模式避免端口冲突
     restart: unless-stopped
     ports:
-      - "11434:11434"  # 统一使用11434端口
+      - "${API_PORT}:${API_PORT}"
 EOF
 
     sudo docker-compose up -d
@@ -303,7 +303,7 @@ check_ollama_service() {
 echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
 
 # 在部署ollama前添加端口检查
-check_port 11434  # 改为检查11434端口
+check_port $(jq -r '.open_ai_api_base | split(":")[2] | split("/")[0]' config.json)
 check_port 8080   # 原有8080检查
 
 # 检查系统类型
@@ -339,7 +339,7 @@ server {
     }
 
     location /v1 { # 新增模型服务代理
-        proxy_pass http://127.0.0.1:11434/v1;  # 改回11434端口
+        proxy_pass http://127.0.0.1:${API_PORT}/v1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -408,32 +408,36 @@ fi
 echo -e "${YELLOW}创建日志文件...${NC}"
 touch nohup.out
 
-# 启动服务前添加配置验证
-echo -e "${YELLOW}检查应用配置...${NC}"
-if [ ! -f "config.json" ]; then
-    echo -e "${RED}错误：缺少配置文件 config.json${NC}"
+# 动态获取API端口（约420-438行）
+API_PORT=$(jq -r '.open_ai_api_base | split(":")[2] | split("/")[0]' config.json)
+if [[ ! $API_PORT =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}错误：无法从 open_ai_api_base 中提取有效端口号${NC}"
     exit 1
 fi
 
-# 获取当前服务器IP
-CURRENT_IP=$(curl -s --connect-timeout 3 ifconfig.me || echo "localhost")
-VALID_PORTS=("11434")
-JQ_CONDITION=".open_ai_api_base | test(\"^http(s)?://(([0-9]{1,3}\\\\.){3}[0-9]{1,3}|localhost|127\\\\.[0-9]+\\\\.[0-9]+\\\\.[0-9]+|\\\\[::1\\\\]):11434/v1$\") and .wechatmp_port == 8080"
+JQ_CONDITION=".wechatmp_port == 8080 and (.open_ai_api_base | test(\"^http(s)?://\"))"
 
 if ! jq -e "${JQ_CONDITION}" config.json >/dev/null; then
-    echo -e "${RED}错误：config.json 需要包含以下配置：${NC}"
+    echo -e "${YELLOW}建议配置检查未通过，请确认以下关键设置：${NC}"
     echo -e "${GREEN}{
-  \"open_ai_api_base\": \"http://<IP或域名>:11434/v1\",
-  \"wechatmp_port\": 8080
+  \"wechatmp_port\": 8080,
+  \"open_ai_api_base\": \"服务端URL（建议格式：http://IP:${API_PORT}/v1）\"
 }${NC}"
     echo -e "允许的格式示例："
     echo -e "• http://localhost:11434/v1"
     echo -e "• http://127.0.0.1:11434/v1"
     echo -e "• http://47.129.174.124:11434/v1"
     echo -e "• http://[::1]:11434/v1 (IPv6)"
-    echo -e "当前配置内容："
+    echo -e "${YELLOW}当前配置内容：${NC}"
     jq . config.json
-    exit 1
+    
+    read -p "是否继续部署？(y/n) " choice
+    case "$choice" in
+        y|Y) echo -e "${YELLOW}强制继续部署...${NC}" ;;
+        *) echo -e "${RED}部署已取消${NC}"; exit 1 ;;
+    esac
+else
+    echo -e "${GREEN}✓ 通过基础配置检查${NC}"
 fi
 
 # 启动服务
@@ -484,7 +488,7 @@ echo -e "\n${YELLOW}[3/3] 验证微信服务连通性...${NC}"
     echo "Nginx状态: $(systemctl is-active nginx 2>/dev/null || echo '未安装')"
     echo "应用服务进程: $(pgrep -f 'python3 app.py')"
     echo "端口监听状态:"
-    sudo netstat -tulnp | grep -E '11434|8080|80'
+    sudo netstat -tulnp | grep -E "${API_PORT}|8080"
 } | tee -a $VALIDATION_LOG
 
 # 输出验证结果
@@ -511,7 +515,7 @@ if pgrep -f "python3 app.py" > /dev/null; then
 else
     echo -e "${RED}× 服务启动异常！请检查：${NC}"
     echo -e "1. 查看错误日志：${GREEN}cat nohup.out${NC}"
-    echo -e "2. 检查端口占用：${GREEN}netstat -tulnp | grep -E '11434|8080|80'${NC}"
+    echo -e "2. 检查端口占用：${GREEN}netstat -tulnp | grep -E "${API_PORT}"${NC}"
     echo -e "3. 重新启动服务：${GREEN}python3 app.py${NC}"
     exit 1
 fi
