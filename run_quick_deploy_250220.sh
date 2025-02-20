@@ -196,10 +196,13 @@ server {
     server_name $(curl -s ifconfig.me);  # 使用服务器IP
 
     location /wx {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8080/wx;  # 添加了 /wx 路径
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;  # 添加协议头
+        proxy_read_timeout 300;  # 增加超时时间
+        proxy_connect_timeout 300;  # 增加连接超时
     }
 }
 EOF
