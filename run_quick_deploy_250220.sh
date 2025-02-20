@@ -18,7 +18,47 @@ check_port() {
             return 0
         else
             echo -e "${YELLOW}警告: 端口 $port 已被 $process_name (PID: $pid) 占用${NC}"
-            return 1
+            echo -e "请选择操作："
+            echo -e "1) 终止占用进程并继续部署"
+            echo -e "2) 取消部署"
+            echo -e "3) 强制继续部署（不推荐）"
+            read -p "请输入选项 [1-3]: " choice
+            
+            case $choice in
+                1)
+                    echo -e "${YELLOW}正在终止进程 $process_name (PID: $pid)...${NC}"
+                    if kill $pid; then
+                        echo -e "${GREEN}✓ 进程已终止${NC}"
+                        sleep 2  # 等待端口释放
+                        if netstat -tuln | grep -q ":$port "; then
+                            echo -e "${RED}错误：端口 $port 仍被占用，可能需要强制终止进程${NC}"
+                            echo -e "建议执行: ${GREEN}sudo kill -9 $pid${NC}"
+                            return 1
+                        fi
+                        return 0
+                    else
+                        echo -e "${RED}错误：无法终止进程，可能需要 sudo 权限${NC}"
+                        return 1
+                    fi
+                    ;;
+                2)
+                    echo -e "${RED}部署已取消${NC}"
+                    exit 1
+                    ;;
+                3)
+                    echo -e "${YELLOW}警告：强制继续部署可能会导致端口冲突${NC}"
+                    read -p "确定要继续吗？[y/N] " confirm
+                    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+                        echo -e "${RED}部署已取消${NC}"
+                        exit 1
+                    fi
+                    return 0
+                    ;;
+                *)
+                    echo -e "${RED}无效的选项${NC}"
+                    return 1
+                    ;;
+            esac
         fi
     fi
     return 0
@@ -35,7 +75,8 @@ check_system_type() {
             "amzn")
                 echo -e "${GREEN}检测到 Amazon Linux${NC}"
                 PACKAGE_MANAGER="yum"
-                NGINX_INSTALL_CMD="amazon-linux-extras install nginx1 -y"
+                NGINX_INSTALL_CMD="amazon-linux-extras enable nginx1 && yum clean metadata && yum -y install nginx"
+                NGINX_SERVICE_CMD="systemctl"
                 ;;
             "debian"|"ubuntu")
                 echo -e "${GREEN}检测到 Debian/Ubuntu${NC}"
@@ -66,54 +107,61 @@ check_and_install_nginx() {
     if ! command -v nginx &> /dev/null; then
         echo -e "${YELLOW}Nginx 未安装，正在安装...${NC}"
         
-        # 根据系统类型安装
-        if [ "$PACKAGE_MANAGER" = "apt-get" ]; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive $NGINX_INSTALL_CMD > /dev/null 2>&1
-        elif [ "$PACKAGE_MANAGER" = "yum" ]; then
-            if [ "$ID" = "amzn" ]; then
-                sudo $NGINX_INSTALL_CMD > /dev/null 2>&1
-            else
-                sudo $NGINX_INSTALL_CMD > /dev/null 2>&1
-            fi
+        if [ "$ID" = "amzn" ]; then
+            echo -e "${YELLOW}配置 Amazon Linux Extras...${NC}"
+            sudo amazon-linux-extras enable nginx1 > /dev/null 2>&1
+            sudo yum clean metadata > /dev/null 2>&1
+            sudo yum -y install nginx > /dev/null 2>&1
+            
+            # 创建必要的目录
+            sudo mkdir -p /etc/nginx/conf.d
+            sudo mkdir -p /var/log/nginx
+            
+            # 确保权限正确
+            sudo chown -R root:root /etc/nginx
+            sudo chmod -R 755 /etc/nginx
+        else
+            sudo $NGINX_INSTALL_CMD > /dev/null 2>&1
         fi
-        echo -e "${GREEN}Nginx 安装完成${NC}"
-    else
-        # 检查版本并更新
-        CURRENT_VERSION=$(nginx -v 2>&1 | grep -o '[0-9.]*$')
-        echo -e "${YELLOW}当前 Nginx 版本: ${CURRENT_VERSION}${NC}"
         
-        if [ "$PACKAGE_MANAGER" = "apt-get" ]; then
-            LATEST_VERSION=$(apt-cache policy nginx | grep Candidate | cut -d ':' -f 2 | tr -d ' ')
-            if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
-                echo -e "${YELLOW}发现新版本: ${LATEST_VERSION}，正在更新...${NC}"
-                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade nginx > /dev/null 2>&1
-                echo -e "${GREEN}Nginx 已更新到最新版本${NC}"
-            else
-                echo -e "${GREEN}Nginx 已是最新版本${NC}"
-            fi
-        elif [ "$PACKAGE_MANAGER" = "yum" ]; then
-            sudo yum check-update nginx > /dev/null 2>&1
-            if [ $? -eq 100 ]; then
-                echo -e "${YELLOW}发现新版本，正在更新...${NC}"
-                sudo yum update -y nginx > /dev/null 2>&1
-                echo -e "${GREEN}Nginx 已更新到最新版本${NC}"
-            else
-                echo -e "${GREEN}Nginx 已是最新版本${NC}"
-            fi
-        fi
+        echo -e "${GREEN}Nginx 安装完成${NC}"
     fi
 
     # 确保 Nginx 服务启动
-    if ! systemctl is-active --quiet nginx; then
+    if [ "$ID" = "amzn" ]; then
         echo -e "${YELLOW}启动 Nginx 服务...${NC}"
+        sudo systemctl daemon-reload
         sudo systemctl start nginx
-    fi
-    
-    # 设置开机自启
-    if ! systemctl is-enabled --quiet nginx; then
-        echo -e "${YELLOW}设置 Nginx 开机自启...${NC}"
+        
+        if ! systemctl is-active --quiet nginx; then
+            echo -e "${RED}Nginx 启动失败，尝试修复...${NC}"
+            # 检查 SELinux
+            if command -v sestatus > /dev/null && [ "$(sestatus | grep 'Current mode' | awk '{print $3}')" != "disabled" ]; then
+                echo -e "${YELLOW}配置 SELinux 允许 Nginx...${NC}"
+                sudo setsebool -P httpd_can_network_connect 1
+            fi
+            # 重试启动
+            sudo systemctl start nginx
+        fi
+        
+        # 设置开机自启
         sudo systemctl enable nginx > /dev/null 2>&1
+    else
+        if ! systemctl is-active --quiet nginx; then
+            echo -e "${YELLOW}启动 Nginx 服务...${NC}"
+            sudo systemctl start nginx
+        fi
+        if ! systemctl is-enabled --quiet nginx; then
+            echo -e "${YELLOW}设置 Nginx 开机自启...${NC}"
+            sudo systemctl enable nginx > /dev/null 2>&1
+        fi
+    fi
+
+    # 验证 Nginx 是否正常运行
+    if ! systemctl is-active --quiet nginx; then
+        echo -e "${RED}错误：Nginx 服务无法启动，请检查系统日志${NC}"
+        echo -e "可以运行: ${GREEN}journalctl -u nginx.service${NC}"
+        exit 1
     fi
 }
 
@@ -122,14 +170,14 @@ echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
 
 # 检查端口占用
 echo -e "${YELLOW}检查端口占用情况...${NC}"
-if ! check_port 8080; then
-    echo -e "${YELLOW}8080 端口被占用，是否继续部署？[y/N]${NC}"
-    read -r response
-    if [[ ! $response =~ ^[Yy]$ ]]; then
+while ! check_port 8080; do
+    echo -e "${YELLOW}端口问题未解决，是否重试？[y/N]${NC}"
+    read -r retry
+    if [[ ! $retry =~ ^[Yy]$ ]]; then
         echo -e "${RED}部署已取消${NC}"
         exit 1
     fi
-fi
+done
 
 # 检查系统类型
 check_system_type
