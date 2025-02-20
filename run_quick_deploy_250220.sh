@@ -165,6 +165,59 @@ check_and_install_nginx() {
     fi
 }
 
+# 安装 Docker 和 Docker Compose
+install_docker() {
+    # 检查 Docker 是否已安装
+    if command -v docker &> /dev/null; then
+        echo -e "${GREEN}✓ Docker 已安装${NC}"
+    else
+        echo -e "${YELLOW}安装 Docker...${NC}"
+        curl -fsSL https://get.docker.com | bash -s docker
+        sudo systemctl enable --now docker
+    fi
+
+    # 检查 Docker 服务状态
+    if ! systemctl is-active --quiet docker; then
+        echo -e "${YELLOW}启动 Docker 服务...${NC}"
+        sudo systemctl start docker
+    fi
+
+    # 检查 Docker Compose 是否已安装
+    if command -v docker-compose &> /dev/null || docker compose version &> /dev/null; then
+        echo -e "${GREEN}✓ Docker Compose 已安装${NC}"
+    else
+        echo -e "${YELLOW}安装 Docker Compose...${NC}"
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" \
+            -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+    fi
+
+    # 验证 Docker Compose 安装
+    if ! docker-compose --version &> /dev/null && ! docker compose version &> /dev/null; then
+        echo -e "${RED}错误：Docker Compose 安装失败${NC}"
+        exit 1
+    fi
+}
+
+# 部署 ollama-proxy
+deploy_ollama_proxy() {
+    echo -e "${YELLOW}部署 Ollama 代理服务...${NC}"
+    sudo tee docker-compose.yml > /dev/null <<EOF
+version: '3'
+services:
+  ollama-proxy:
+    image: ghcr.io/ollama-webui/ollama-proxy:main
+    ports:
+      - "11435:8000"
+    environment:
+      - OLLAMA_API_BASE_URL=http://host.docker.internal:11434
+    restart: unless-stopped
+EOF
+
+    sudo docker-compose up -d
+    echo -e "${GREEN}Ollama 代理服务已启动${NC}"
+}
+
 # 主程序开始
 echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
 
@@ -181,6 +234,10 @@ done
 
 # 检查系统类型
 check_system_type
+
+# 安装 Docker 和 Docker Compose
+install_docker
+deploy_ollama_proxy
 
 # 执行 Nginx 检查和安装
 check_and_install_nginx
