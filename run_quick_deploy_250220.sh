@@ -214,6 +214,20 @@ EOF
 
     sudo docker-compose up -d
     echo -e "${GREEN}Ollama 代理服务已启动${NC}"
+    
+    # 新增服务健康检查
+    echo -e "${YELLOW}等待Ollama服务初始化...${NC}"
+    local retries=0
+    until curl -s http://localhost:11434/api/version >/dev/null || [ $retries -eq 30 ]; do
+        sleep 1
+        echo -n "."
+        ((retries++))
+    done
+    if [ $retries -eq 30 ]; then
+        echo -e "\n${RED}错误：Ollama服务启动超时${NC}"
+        exit 1
+    fi
+    echo -e "\n${GREEN}✓ Ollama服务已就绪${NC}"
 }
 
 # 主程序开始
@@ -259,6 +273,15 @@ server {
         proxy_read_timeout 300;  # 增加超时时间
         proxy_connect_timeout 300;  # 增加连接超时
     }
+
+    location /v1 {  # 新增模型服务代理
+        proxy_pass http://127.0.0.1:11434/v1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+    }
 }
 EOF
     # 测试 Nginx 配置
@@ -303,6 +326,23 @@ fi
 # 创建日志文件
 echo -e "${YELLOW}创建日志文件...${NC}"
 touch nohup.out
+
+# 启动服务前添加配置验证
+echo -e "${YELLOW}检查应用配置...${NC}"
+if [ ! -f "config.json" ]; then
+    echo -e "${RED}错误：缺少配置文件 config.json${NC}"
+    exit 1
+fi
+
+# 验证配置中的API地址
+if ! grep -q '"open_ai_api_base": "http://localhost:11434/v1"' config.json; then
+    echo -e "${RED}错误：config.json 配置不正确，请确保包含以下内容：${NC}"
+    echo -e '${GREEN}{
+  "open_ai_api_base": "http://localhost:11434/v1",
+  "port": 8080
+}${NC}'
+    exit 1
+fi
 
 # 启动服务
 echo -e "${GREEN}启动服务...${NC}"
