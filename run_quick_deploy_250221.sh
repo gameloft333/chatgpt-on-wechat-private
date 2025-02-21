@@ -300,7 +300,7 @@ check_ollama_service() {
 }
 
 # 主程序开始
-echo -e "${GREEN}=== ChatGPT WeChat MP 快速部署脚本 ===${NC}"
+echo -e "${GREEN}=== AILLM WeChat MP 快速部署脚本 v.1.9.3 ===${NC}"
 
 # 在部署ollama前添加端口检查
 check_port $(jq -r '.open_ai_api_base | split(":")[2] | split("/")[0]' config.json)
@@ -473,7 +473,7 @@ fi
 # 修改服务启动方式
 echo -e "${GREEN}启动服务...${NC}"
 # 使用更可靠的后台启动方式
-setsid nohup python3 app.py >> nohup.out 2>&1 &
+setsid nohup python3 -u app.py >> nohup.out 2>&1 &  # 添加 -u 参数禁用输出缓冲
 sleep 2  # 确保进程启动
 
 # 等待服务启动

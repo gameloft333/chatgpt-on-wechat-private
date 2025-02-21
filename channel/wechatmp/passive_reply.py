@@ -102,6 +102,8 @@ class Query:
                     )
                 )
 
+                logger.debug(f"[缓存跟踪] 收到消息 from={from_user} msg_id={message_id} content={content}")
+
                 task_running = True
                 waiting_until = request_time + 4
                 while time.time() < waiting_until:
@@ -114,6 +116,7 @@ class Query:
                 reply_text = ""
                 if task_running:
                     if request_cnt < 3:
+                        '''
                         # 在设置缓存前添加键值生成逻辑
                         key = f"wxmp_{from_user}_{message_id}"
                         
@@ -123,11 +126,22 @@ class Query:
                             "status": "processing"
                         }, timeout=30)
                         
+                        logger.debug(f"[缓存操作] 设置缓存 {key}: {cache.get(key)}")
+                        logger.debug(f"[缓存操作] 获取缓存 {key}: {cache.get(key)}")
+                        logger.debug(f"[缓存操作] 删除缓存 {key}")
+                        
                         return "success"
+                    '''
+                        logger.debug(f"[重试处理] 等待AI响应 request_cnt={request_cnt}")
+                        return "success"  # 立即返回让微信重试
                     else:
                         # 最终超时处理
+                        logger.warning("[超时处理] 超过最大重试次数")
                         reply_text = "【思考超时，回复任意文字重新获取】" if request_cnt == 2 else cache.get(key)["result"]
-                        # 清理缓存
+                        # 清理缓存前验证状态
+                        cached_data = cache.get(key)
+                        if cached_data and cached_data.get("status") == "processing":
+                            logger.warning(f"[缓存异常] 未完成处理被清除 key={key}")
                         cache.delete(key)
                         replyPost = create_reply(reply_text, msg)
                         return encrypt_func(replyPost.render())
