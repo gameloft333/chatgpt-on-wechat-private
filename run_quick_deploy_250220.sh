@@ -487,6 +487,7 @@ echo -e "服务验证日志 $(date)\n" > $VALIDATION_LOG
 
 # 验证Ollama服务
 echo -e "${YELLOW}[1/3] 验证Ollama服务...${NC}"
+{
     echo -e "3. 重新启动服务：${GREEN}python3 app.py${NC}"
     echo -e "\n=== Ollama服务状态 ==="
     echo "API版本: $(curl -s http://localhost:11434/api/version | jq .)"
