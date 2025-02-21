@@ -1,3 +1,5 @@
+import time
+
 class MemoryCache:
     def __init__(self):
         self._storage = {}
@@ -10,6 +12,11 @@ class MemoryCache:
     
     def get(self, key):
         data = self._storage.get(key)
-        if data and data['expire'] > time.time():
-            return data['value']
-        return None
+        if data and data['expire'] <= time.time():
+            del self._storage[key]
+            return None
+        return data['value'] if data else None
+
+    def delete(self, key):
+        if key in self._storage:
+            del self._storage[key]

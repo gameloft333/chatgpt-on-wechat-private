@@ -392,6 +392,8 @@ if [ ! -f "$CACHE_FILE" ]; then
     echo -e "${YELLOW}创建缓存模块...${NC}"
     sudo mkdir -p common
     sudo tee $CACHE_FILE > /dev/null <<'EOF'
+import time  # 关键修复点
+
 class MemoryCache:
     def __init__(self):
         self._storage = {}
@@ -580,6 +582,10 @@ if pgrep -f "python3 app.py" > /dev/null; then
     # 新增进程树结构
     echo -e "\n${YELLOW}进程树结构：${NC}"
     pstree -p ${pids[0]} | grep 'python3'
+    
+    # 新增缓存有效性验证
+    echo -e "\n${YELLOW}缓存有效性验证：${NC}"
+    echo -e "• 缓存有效性: $(python3 -c 'from common.cache import MemoryCache; c=MemoryCache(); c.set("test",1); print("正常" if c.get("test") else "异常")')"
     
     # 移除自动进入tail的模式，改为提示
     echo -e "\n${YELLOW}输入 ${GREEN}tail -f nohup.out${YELLOW} 查看实时日志（Ctrl+C不会停止服务）${NC}"
