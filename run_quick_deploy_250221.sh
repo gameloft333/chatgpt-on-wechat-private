@@ -385,6 +385,24 @@ if [ ! -d "venv" ]; then
 fi
 source venv/bin/activate
 
+# 新增缓存模块创建（应在此处插入）
+# 创建缓存模块
+CACHE_FILE="common/cache.py"
+if [ ! -f "$CACHE_FILE" ]; then
+    echo -e "${YELLOW}创建缓存模块...${NC}"
+    sudo mkdir -p common
+    sudo tee $CACHE_FILE > /dev/null <<'EOF'
+class MemoryCache:
+    def __init__(self):
+        self._storage = {}
+    def set(self, key, value, timeout=300):
+        self._storage[key] = {'value': value, 'expire': time.time() + timeout}
+    def get(self, key):
+        data = self._storage.get(key)
+        return data['value'] if data and data['expire'] > time.time() else None
+EOF
+fi
+
 # 检查依赖是否已安装
 REQUIREMENTS_HASH=$(sha1sum requirements.txt | cut -d' ' -f1)
 CACHED_HASH_FILE=".requirements_hash"
@@ -548,9 +566,20 @@ if pgrep -f "python3 app.py" > /dev/null; then
     
     # 新增服务状态验证
     echo -e "\n${YELLOW}服务进程信息：${NC}"
-    echo -e "• 进程ID: ${GREEN}$(pgrep -f 'python3 app.py')${NC}"
-    echo -e "• 启动时间: ${GREEN}$(ps -p $(pgrep -f 'python3 app.py') -o lstart=)${NC}"
-    echo -e "• 内存占用: ${GREEN}$(ps -p $(pgrep -f 'python3 app.py') -o rss= | numfmt --to=iec)${NC}"
+    pids=($(pgrep -f 'python3 app.py'))
+    if [ ${#pids[@]} -eq 0 ]; then
+        echo -e "${RED}× 未找到运行中的服务进程${NC}"
+    else
+        for pid in "${pids[@]}"; do
+            echo -e "• 进程ID: ${GREEN}${pid}${NC}"
+            echo -e "  启动时间: ${GREEN}$(ps -p $pid -o lstart= 2>/dev/null || echo '未知')${NC}"
+            echo -e "  内存占用: ${GREEN}$(ps -p $pid -o rss= 2>/dev/null | numfmt --to=iec || echo '未知')${NC}"
+        done
+    fi
+    
+    # 新增进程树结构
+    echo -e "\n${YELLOW}进程树结构：${NC}"
+    pstree -p ${pids[0]} | grep 'python3'
     
     # 移除自动进入tail的模式，改为提示
     echo -e "\n${YELLOW}输入 ${GREEN}tail -f nohup.out${YELLOW} 查看实时日志（Ctrl+C不会停止服务）${NC}"
@@ -569,4 +598,5 @@ if [ $exit_status -eq 0 ]; then
 else
     echo -e "${RED}× 部署脚本异常退出 (代码: $exit_status)${NC}"
 fi
+
 exit 0

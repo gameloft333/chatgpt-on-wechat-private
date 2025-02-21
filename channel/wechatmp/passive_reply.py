@@ -13,6 +13,7 @@ from channel.wechatmp.wechatmp_message import WeChatMPMessage
 from common.log import logger
 from common.utils import split_string_by_utf8_length
 from config import conf, subscribe_msg
+from common.cache import MemoryCache  # 新增缓存模块导入
 
 
 # This class is instantiated once per query
@@ -112,11 +113,16 @@ class Query:
                 reply_text = ""
                 if task_running:
                     if request_cnt < 2:
-                        # 添加进度提示
+                        # 在设置缓存前添加键值生成逻辑
+                        key = f"wxmp_{from_user}_{message_id}"
+                        
+                        # 修改后的缓存处理逻辑（约121-125行）
+                        cache = MemoryCache()  # 显式初始化缓存实例
                         cache.set(key, {
-                            "result": f"【AI正在思考中({request_cnt+1}/2)...】", 
+                            "result": f"【AI正在思考中({request_cnt+1}/2)...】",
                             "status": "processing"
                         }, timeout=30)
+                        
                         return "success"
                     else:
                         # 最终超时处理
