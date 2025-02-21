@@ -130,7 +130,6 @@ class ChatGPTBot(Bot, OpenAIImage):
                 args = self.args
             response = openai.ChatCompletion.create(
                 api_key=api_key,
-                model="deepseek-r1:14b",  # 明确指定模型版本
                 messages=session.messages,
                 **args
             )
