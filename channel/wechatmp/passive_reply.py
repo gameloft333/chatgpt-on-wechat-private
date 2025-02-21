@@ -102,7 +102,7 @@ class Query:
                     )
                 )
 
-                logger.debug(f"[缓存跟踪] 收到消息 from={from_user} msg_id={message_id} content={content}")
+                logger.debug(f"[缓存追踪] 用户={from_user} 消息ID={message_id} 内容={content[:20]}...")
 
                 task_running = True
                 waiting_until = request_time + 4
@@ -132,11 +132,15 @@ class Query:
                         
                         return "success"
                     '''
-                        logger.debug(f"[重试处理] 等待AI响应 request_cnt={request_cnt}")
+                        logger.debug(f"[重试机制] 等待AI响应 重试次数={request_cnt}")
                         return "success"  # 立即返回让微信重试
+                        # waiting for timeout (the POST request will be closed by Wechat official server)
+                        time.sleep(2)
+                        # and do nothing, waiting for the next request
                     else:
                         # 最终超时处理
-                        logger.warning("[超时处理] 超过最大重试次数")
+                        logger.error("[超时处理] 超过最大重试次数")
+                        cache.delete(key)  # 强制清理缓存
                         reply_text = "【思考超时，回复任意文字重新获取】" if request_cnt == 2 else cache.get(key)["result"]
                         # 清理缓存前验证状态
                         cached_data = cache.get(key)
