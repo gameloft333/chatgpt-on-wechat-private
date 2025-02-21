@@ -1,5 +1,6 @@
 import asyncio
 import time
+import threading
 
 import web
 from wechatpy import parse_message
@@ -15,6 +16,7 @@ from common.utils import split_string_by_utf8_length
 from config import conf, subscribe_msg
 from common.cache import MemoryCache  # 新增缓存模块导入
 cache = MemoryCache()
+cache_lock = threading.Lock()
 
 
 # This class is instantiated once per query
@@ -121,10 +123,11 @@ class Query:
                         key = f"wxmp_{from_user}_{message_id}"
                         
                         # 修改后的缓存处理逻辑
-                        cache.set(key, {
-                            "result": f"【AI正在思考中({request_cnt+1}/2)...】",
-                            "status": "processing"
-                        }, timeout=30)
+                        with cache_lock:
+                            cache.set(key, {
+                                "result": f"【AI正在思考中({request_cnt+1}/2)...】",
+                                "status": "processing"
+                            }, timeout=30)
                         
                         logger.debug(f"[缓存操作] 设置缓存 {key}: {cache.get(key)}")
                         logger.debug(f"[缓存操作] 获取缓存 {key}: {cache.get(key)}")

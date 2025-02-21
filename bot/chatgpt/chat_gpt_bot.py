@@ -83,6 +83,10 @@ class ChatGPTBot(Bot, OpenAIImage):
             #     # reply in stream
             #     return self.reply_text_stream(query, new_query, session_id)
 
+            if context.get("is_retry", False):  # 通过context传递重试状态
+                logger.debug("跳过微信重试请求")
+                return Reply(ReplyType.TEXT, "处理中请稍候...")
+
             reply_content = self.reply_text(session, api_key, args=new_args)
             logger.debug(
                 "[CHATGPT] new_query={}, session_id={}, reply_cont={}, completion_tokens={}".format(
