@@ -450,9 +450,10 @@ else
     echo -e "${GREEN}✓ 通过基础配置检查${NC}"
 fi
 
-# 修改服务启动方式（约456行）
+# 修改服务启动方式
 echo -e "${GREEN}启动服务...${NC}"
-nohup python3 app.py >> nohup.out 2>&1 &
+# 使用更可靠的后台启动方式
+setsid nohup python3 app.py >> nohup.out 2>&1 &
 sleep 2  # 确保进程启动
 
 # 等待服务启动
@@ -533,30 +534,39 @@ echo -e "${YELLOW}关键指标检查："
 echo -e "• Ollama模型加载: $(grep -q 'deepseek-r1:14b' $VALIDATION_LOG && echo '成功' || echo '失败')"
 echo -e "• 对话接口响应: $(grep -q '你好' $VALIDATION_LOG && echo '正常' || echo '异常')"
 echo -e "• 服务进程状态: $(pgrep -f 'python3 app.py' &> /dev/null && echo '运行中' || echo '未运行')${NC}"
-# 移除原来的tail命令（约525行）
-# 改为提示查看日志的方法
-echo -e "\n${YELLOW}日志查看方式：${NC}"
-echo -e "实时日志: ${GREEN}tail -f nohup.out${NC}"
-echo -e "历史日志: ${GREEN}cat nohup.out${NC}"
 
-# 新增服务状态检查提示（添加在脚本末尾）
+# 修改后的服务状态提示模块（约543-567行）
 echo -e "\n${YELLOW}=== 服务启动状态检查 ===${NC}"
 if pgrep -f "python3 app.py" > /dev/null; then
     echo -e "${GREEN}✓ 服务已成功启动！${NC}"
     echo -e "${YELLOW}操作指引：${NC}"
-    echo -e "1. 请在微信公众平台配置服务器URL: http://$(curl -s ifconfig.me)/wx"
-    echo -e "2. 请确保已将服务器IP ($(curl -s ifconfig.me)) 添加到公众号IP白名单"
-    echo -e "3. 实时日志查看（Ctrl+C退出）：${GREEN}tail -f nohup.out${NC}"
+    echo -e "1. 请在微信公众平台配置服务器URL: ${GREEN}http://$(curl -s ifconfig.me)/wx${NC}"
+    echo -e "2. 请确保已将服务器IP (${GREEN}$(curl -s ifconfig.me)${NC}) 添加到公众号IP白名单"
+    echo -e "3. 实时日志查看方式：${GREEN}tail -f nohup.out${NC}"
     echo -e "4. Nginx错误日志查看：${GREEN}sudo tail -f /var/log/nginx/error.log${NC}"
     echo -e "5. 停止服务命令：${GREEN}pkill -f 'python3 app.py' && docker-compose down${NC}"
     
-    # 保留日志跟踪功能
-    echo -e "\n${YELLOW}正在进入实时日志监控...${NC}"
-    tail -f nohup.out
+    # 新增服务状态验证
+    echo -e "\n${YELLOW}服务进程信息：${NC}"
+    echo -e "• 进程ID: ${GREEN}$(pgrep -f 'python3 app.py')${NC}"
+    echo -e "• 启动时间: ${GREEN}$(ps -p $(pgrep -f 'python3 app.py') -o lstart=)${NC}"
+    echo -e "• 内存占用: ${GREEN}$(ps -p $(pgrep -f 'python3 app.py') -o rss= | numfmt --to=iec)${NC}"
+    
+    # 移除自动进入tail的模式，改为提示
+    echo -e "\n${YELLOW}输入 ${GREEN}tail -f nohup.out${YELLOW} 查看实时日志（Ctrl+C不会停止服务）${NC}"
 else
     echo -e "${RED}× 服务启动异常！请检查：${NC}"
     echo -e "1. 查看错误日志：${GREEN}cat nohup.out${NC}"
-    echo -e "2. 检查端口占用：${GREEN}netstat -tulnp | grep -E "${API_PORT}"${NC}"
-    echo -e "3. 重新启动服务：${GREEN}python3 app.py${NC}"
+    echo -e "2. 检查端口占用：${GREEN}sudo ss -tulnp | grep -E "${API_PORT}|8080"${NC}"
+    echo -e "3. 重新启动服务：${GREEN}setsid nohup python3 app.py >> nohup.out 2>&1 &${NC}"
     exit 1
 fi
+
+# 安全退出脚本（新增退出码验证）
+exit_status=$?
+if [ $exit_status -eq 0 ]; then
+    echo -e "${GREEN}✓ 部署脚本执行完成，服务保持后台运行${NC}"
+else
+    echo -e "${RED}× 部署脚本异常退出 (代码: $exit_status)${NC}"
+fi
+exit 0
