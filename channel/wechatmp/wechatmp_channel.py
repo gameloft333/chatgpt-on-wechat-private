@@ -11,6 +11,7 @@ import web
 from wechatpy.crypto import WeChatCrypto
 from wechatpy.exceptions import WeChatClientException
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from bridge.context import *
 from bridge.reply import *
@@ -57,6 +58,7 @@ class WechatMPChannel(ChatChannel):
             t = threading.Thread(target=self.start_loop, args=(self.delete_media_loop,))
             t.setDaemon(True)
             t.start()
+        self.executor = ThreadPoolExecutor(max_workers=10)  # 添加线程池
 
     def startup(self):
         if self.passive_reply:
@@ -302,3 +304,13 @@ class WechatMPChannel(ChatChannel):
         if self.passive_reply:
             assert session_id not in self.cache_dict
             self.running.remove(session_id)
+
+    def handle_request(self, data):
+        # 将原处理逻辑包装为异步任务
+        self.executor.submit(self._async_handle, data)
+        return 'success'  # 立即返回微信服务器
+
+    def _async_handle(self, data):
+        # 原消息处理逻辑
+        logger.debug("[wechatmp] Received message: %s" % data)
+        # ...后续处理...

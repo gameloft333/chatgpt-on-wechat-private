@@ -134,10 +134,21 @@ class AliQwenBot(Bot):
                 result["content"] = "请再问我一次"
                 if need_retry:
                     time.sleep(10)
+            # 捕获API连接异常（通常由网络问题或服务不可用引起）
             elif isinstance(e, openai.error.APIConnectionError):
-                logger.warn("[QWEN] APIConnectionError: {}".format(e))
-                need_retry = False
-                result["content"] = "我连接不到你的网络"
+                # 记录非致命性警告日志（区别于error级别）
+                logger.warn("[QWEN] APIConnectionError: {}".format(e))  
+                
+                # 设置重试标志为False，避免无限重试循环
+                # 注意：阿里云API可能需要特殊重试策略，需参考官方文档
+                need_retry = False  
+                
+                # 构造用户友好错误信息
+                # 注意：此处的错误提示需要与产品UX设计保持一致
+                result["content"] = "我连接不到你的网络"  
+                
+                # 潜在改进点：可添加网络诊断逻辑（如ping测试）
+                # 潜在改进点：可添加失败指标统计（用于监控仪表盘）
             else:
                 logger.exception("[QWEN] Exception: {}".format(e))
                 need_retry = False

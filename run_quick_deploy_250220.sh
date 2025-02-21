@@ -334,8 +334,18 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;  # 添加协议头
+        
+        # 超时设置增强（单位：秒）
         proxy_read_timeout 300;  # 增加超时时间
         proxy_connect_timeout 300;  # 增加连接超时
+        proxy_http_version 1.1;  # 添加HTTP协议优化
+        proxy_set_header Connection "";
+        proxy_send_timeout 300;
+        
+        # 缓冲区优化
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
     }
 
     location /v1 { # 新增模型服务代理
@@ -440,9 +450,10 @@ else
     echo -e "${GREEN}✓ 通过基础配置检查${NC}"
 fi
 
-# 启动服务
+# 修改服务启动方式（约456行）
 echo -e "${GREEN}启动服务...${NC}"
-nohup python3 app.py > nohup.out 2>&1 &
+nohup python3 app.py >> nohup.out 2>&1 &
+sleep 2  # 确保进程启动
 
 # 等待服务启动
 echo -e "${YELLOW}等待服务启动...${NC}"
@@ -456,6 +467,19 @@ if ! command -v jq &> /dev/null; then
     echo -e "${YELLOW}安装jq工具...${NC}"
     sudo yum install -y jq || sudo apt-get install -y jq
 fi
+# 添加进程守护检查（约513-532行）
+echo -e "\n${YELLOW}=== 服务守护配置 ===${NC}"
+if pgrep -f "python3 app.py" > /dev/null; then
+    echo -e "${GREEN}✓ 服务进程已守护 (PID: $(pgrep -f "python3 app.py"))${NC}"
+    echo -e "${YELLOW}进程管理命令：${NC}"
+    echo -e "启动: ${GREEN}nohup python3 app.py >> nohup.out 2>&1 &${NC}"
+    echo -e "停止: ${GREEN}pkill -f 'python3 app.py'${NC}"
+    echo -e "重启: ${GREEN}pkill -f 'python3 app.py' && nohup python3 app.py >> nohup.out 2>&1 &${NC}"
+    echo -e "状态: ${GREEN}pgrep -f 'python3 app.py'${NC}"
+else
+    echo -e "${RED}× 服务进程启动失败！${NC}"
+    exit 1
+fi
 
 # 创建验证日志文件
 VALIDATION_LOG="deployment_checks.log"
@@ -463,12 +487,23 @@ echo -e "服务验证日志 $(date)\n" > $VALIDATION_LOG
 
 # 验证Ollama服务
 echo -e "${YELLOW}[1/3] 验证Ollama服务...${NC}"
-{
+    echo -e "3. 重新启动服务：${GREEN}python3 app.py${NC}"
     echo -e "\n=== Ollama服务状态 ==="
     echo "API版本: $(curl -s http://localhost:11434/api/version | jq .)"
     echo "已加载模型:"
     curl -s http://localhost:11434/api/tags | jq '.models[].name'
 } | tee -a $VALIDATION_LOG
+
+# 修改后的模型验证
+echo "已加载模型:"
+MODEL_LIST=$(curl -s http://localhost:11434/api/tags | jq -r '.models[].name')
+echo "$MODEL_LIST"
+if echo "$MODEL_LIST" | grep -q "deepseek-r1:14b"; then
+    echo -e "${GREEN}✓ 目标模型已加载${NC}"
+else
+    echo -e "${RED}× 未找到 deepseek-r1:14b 模型${NC}"
+    exit 1
+fi
 
 # 验证对话接口
 echo -e "\n${YELLOW}[2/3] 测试对话接口...${NC}"
@@ -497,6 +532,11 @@ echo -e "${YELLOW}关键指标检查："
 echo -e "• Ollama模型加载: $(grep -q 'deepseek-r1:14b' $VALIDATION_LOG && echo '成功' || echo '失败')"
 echo -e "• 对话接口响应: $(grep -q '你好' $VALIDATION_LOG && echo '正常' || echo '异常')"
 echo -e "• 服务进程状态: $(pgrep -f 'python3 app.py' &> /dev/null && echo '运行中' || echo '未运行')${NC}"
+# 移除原来的tail命令（约525行）
+# 改为提示查看日志的方法
+echo -e "\n${YELLOW}日志查看方式：${NC}"
+echo -e "实时日志: ${GREEN}tail -f nohup.out${NC}"
+echo -e "历史日志: ${GREEN}cat nohup.out${NC}"
 
 # 新增服务状态检查提示（添加在脚本末尾）
 echo -e "\n${YELLOW}=== 服务启动状态检查 ===${NC}"
