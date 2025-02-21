@@ -111,14 +111,18 @@ class Query:
 
                 reply_text = ""
                 if task_running:
-                    if request_cnt < 3:
-                        # waiting for timeout (the POST request will be closed by Wechat official server)
-                        time.sleep(2)
-                        # and do nothing, waiting for the next request
+                    if request_cnt < 2:
+                        # 添加进度提示
+                        cache.set(key, {
+                            "result": f"【AI正在思考中({request_cnt+1}/2)...】", 
+                            "status": "processing"
+                        }, timeout=30)
                         return "success"
-                    else:  # request_cnt == 3:
-                        # return timeout message
-                        reply_text = "【正在思考中，回复任意文字尝试获取回复】"
+                    else:
+                        # 最终超时处理
+                        reply_text = "【思考超时，回复任意文字重新获取】" if request_cnt == 2 else cache.get(key)["result"]
+                        # 清理缓存
+                        cache.delete(key)
                         replyPost = create_reply(reply_text, msg)
                         return encrypt_func(replyPost.render())
 
